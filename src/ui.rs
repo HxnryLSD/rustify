@@ -43,7 +43,8 @@ pub struct RustifyApp {
     pub tokio_runtime: Option<tokio::runtime::Runtime>,
 
     // Pending async operation receivers (polled each frame in update())
-    pub pending_search: Option<oneshot::Receiver<Result<Vec<crate::spotify_client::Track>, String>>>,
+    pub pending_search:
+        Option<oneshot::Receiver<Result<Vec<crate::spotify_client::Track>, String>>>,
 }
 
 impl RustifyApp {
@@ -200,8 +201,14 @@ impl RustifyApp {
                 return;
             };
             rt.spawn(async move {
-                let result = client.search(&tokens.access_token, &privacy, &query, "track", 20).await;
-                let _ = tx.send(result.map(|r| r.tracks.map(|t| t.items).unwrap_or_default()).map_err(|e| e.to_string()));
+                let result = client
+                    .search(&tokens.access_token, &privacy, &query, "track", 20)
+                    .await;
+                let _ = tx.send(
+                    result
+                        .map(|r| r.tracks.map(|t| t.items).unwrap_or_default())
+                        .map_err(|e| e.to_string()),
+                );
             });
             self.pending_search = Some(rx);
         }
