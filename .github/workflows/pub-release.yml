@@ -29,7 +29,7 @@ jobs:
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libgtk-3-dev libwebkit2gtk-4.0-dev
+          sudo apt-get install -y libasound2-dev libgtk-3-dev
 
       - name: Build release binary
         run: cargo build --release
@@ -78,7 +78,7 @@ jobs:
 
   release-macos:
     name: macOS (x86_64 + Apple Silicon) Release
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
