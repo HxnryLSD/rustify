@@ -15,9 +15,7 @@ pub struct Config {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthConfig {
-    pub client_id: String,
-    pub client_secret: String,
-    pub redirect_url: String,
+    pub sp_dc_cookie: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,9 +57,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             auth: AuthConfig {
-                client_id: String::new(),
-                client_secret: String::new(),
-                redirect_url: "http://localhost:8888/callback".to_string(),
+                sp_dc_cookie: String::new(),
             },
             privacy: PrivacyConfig {
                 private_session: true,
@@ -95,12 +91,11 @@ impl Default for Config {
 impl Config {
     /// Load config from disk, falling back to defaults if missing or invalid.
     pub fn load() -> Self {
-        if let Some(path) = Self::config_path() {
-            if let Ok(data) = fs::read_to_string(&path) {
-                if let Ok(cfg) = toml::from_str::<Config>(&data) {
-                    return cfg;
-                }
-            }
+        if let Some(path) = Self::config_path()
+            && let Ok(data) = fs::read_to_string(&path)
+            && let Ok(cfg) = toml::from_str::<Config>(&data)
+        {
+            return cfg;
         }
         Config::default()
     }

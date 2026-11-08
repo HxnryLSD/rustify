@@ -1,130 +1,70 @@
-use oauth2::{
-    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, RedirectUrl, Scope, TokenUrl,
-};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 use crate::config::TokenCache;
 
-/// Spotify OAuth 2.0 client configuration.
+/// Spotify authentication using the sp_dc browser cookie.
+///
+/// No Spotify Developer Dashboard registration, no client_id, no client_secret.
+/// The user provides their sp_dc cookie value (from their browser's Spotify cookies),
+/// and Rustify uses it to obtain an access token from Spotify's token endpoint.
 pub struct SpotifyAuth {
-    client_id: String,
-    client_secret: String,
-    redirect_url: String,
+    sp_dc_cookie: String,
     http_client: reqwest::Client,
 }
 
 impl SpotifyAuth {
-    pub fn new(client_id: &str, client_secret: &str, redirect_url: &str) -> Self {
+    pub fn new(sp_dc_cookie: &str) -> Self {
         Self {
-            client_id: client_id.to_string(),
-            client_secret: client_secret.to_string(),
-            redirect_url: redirect_url.to_string(),
+            sp_dc_cookie: sp_dc_cookie.to_string(),
             http_client: reqwest::Client::new(),
         }
     }
 
-    /// Generate the authorization URL the user should visit in a browser.
-    pub fn authorize_url(&self) -> (String, CsrfToken) {
-        let auth_url = AuthUrl::new("https://accounts.spotify.com/authorize".to_string()).unwrap();
-        let token_url =
-            TokenUrl::new("https://accounts.spotify.com/api/token".to_string()).unwrap();
-
-        let client = oauth2::basic::BasicClient::new(ClientId::new(self.client_id.clone()))
-            .set_client_secret(ClientSecret::new(self.client_secret.clone()))
-            .set_auth_uri(auth_url)
-            .set_token_uri(token_url)
-            .set_redirect_uri(RedirectUrl::new(self.redirect_url.clone()).unwrap());
-
-        let (auth_url, csrf_state) = client
-            .authorize_url(CsrfToken::new_random)
-            .add_scope(Scope::new("user-read-private".to_string()))
-            .add_scope(Scope::new("user-read-email".to_string()))
-            .add_scope(Scope::new("user-library-read".to_string()))
-            .add_scope(Scope::new("user-library-modify".to_string()))
-            .add_scope(Scope::new("playlist-read-private".to_string()))
-            .add_scope(Scope::new("playlist-modify-private".to_string()))
-            .add_scope(Scope::new("user-read-playback-state".to_string()))
-            .add_scope(Scope::new("user-modify-playback-state".to_string()))
-            .add_scope(Scope::new("user-read-currently-playing".to_string()))
-            .add_scope(Scope::new("streaming".to_string()))
-            .url();
-        (auth_url.to_string(), csrf_state)
-    }
-
-    /// Exchange an authorization code for tokens.
-    pub async fn exchange_code(
+    /// Exchange the sp_dc cookie for an access token via Spotify's token endpoint.
+    pub async fn exchange_cookie_for_token(
         &self,
-        code: &str,
     ) -> Result<TokenCache, Box<dyn std::error::Error + Send + Sync>> {
-        let params = [
-            ("grant_type", "authorization_code"),
-            ("code", code),
-            ("redirect_uri", &self.redirect_url),
-            ("client_id", &self.client_id),
-            ("client_secret", &self.client_secret),
-        ];
-
         let resp = self
             .http_client
-            .post("https://accounts.spotify.com/api/token")
-            .form(&params)
+            .post("https://open.spotify.com/get_access_token")
+            .header("Cookie", format!("sp_dc={}", self.sp_dc_cookie))
+            .header("Referer", "https://open.spotify.com/")
+            .header("Origin", "https://open.spotify.com")
+            .header(
+                "User-Agent",
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+            )
             .send()
             .await?
             .error_for_status()?;
 
-        let token_response: TokenResponse = resp.json().await?;
+        let token_response: SpotifyTokenResponse = resp.json().await?;
         Ok(token_response.into_token_cache())
     }
 
-    /// Refresh an expired access token using the refresh token.
-    pub async fn refresh_token(
+    /// Refresh an expired access token using the sp_dc cookie again.
+    pub async fn refresh_with_cookie(
         &self,
-        refresh_token: &str,
     ) -> Result<TokenCache, Box<dyn std::error::Error + Send + Sync>> {
-        let params = [
-            ("grant_type", "refresh_token"),
-            ("refresh_token", refresh_token),
-            ("client_id", &self.client_id),
-            ("client_secret", &self.client_secret),
-        ];
-
-        let resp = self
-            .http_client
-            .post("https://accounts.spotify.com/api/token")
-            .form(&params)
-            .send()
-            .await?
-            .error_for_status()?;
-
-        let token_response: TokenResponse = resp.json().await?;
-        Ok(token_response.into_token_cache())
+        self.exchange_cookie_for_token().await
     }
 }
 
-/// Raw Spotify token response.
+/// Raw Spotify token response from the get_access_token endpoint.
 #[derive(Debug, Deserialize)]
-struct TokenResponse {
-    access_token: String,
-    token_type: String,
-    expires_in: u64,
-    refresh_token: Option<String>,
-    scope: Option<String>,
+#[allow(non_snake_case)]
+struct SpotifyTokenResponse {
+    accessToken: String,
+    accessTokenExpirationTimestampMs: u64,
 }
 
-impl TokenResponse {
+impl SpotifyTokenResponse {
     fn into_token_cache(self) -> TokenCache {
-        let expires_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64
-            + self.expires_in as i64;
-
         TokenCache {
-            access_token: self.access_token,
-            refresh_token: self.refresh_token.unwrap_or_default(),
-            expires_at,
+            access_token: self.accessToken,
+            refresh_token: String::new(), // sp_dc flow does not issue refresh tokens
+            expires_at: (self.accessTokenExpirationTimestampMs / 1000) as i64,
         }
     }
 }
@@ -132,7 +72,7 @@ impl TokenResponse {
 /// Thread-safe authentication state shared across the app.
 #[derive(Clone, Default)]
 pub struct AuthState {
-    inner: Arc<Mutex<AuthStateInner>>,
+    inner: Arc<std::sync::Mutex<AuthStateInner>>,
 }
 
 #[derive(Default)]
@@ -146,33 +86,50 @@ impl AuthState {
         Self::default()
     }
 
-    pub async fn set_tokens(&self, tokens: TokenCache) {
-        let mut inner = self.inner.lock().await;
+    pub fn set_tokens_blocking(&self, tokens: TokenCache) {
+        let mut inner = self.inner.lock().unwrap();
         inner.tokens = Some(tokens);
         inner.is_authenticated = true;
     }
 
-    pub fn set_tokens_blocking(&self, tokens: TokenCache) {
-        let mut inner = self.inner.try_lock().unwrap();
+    pub fn get_tokens_blocking(&self) -> Option<TokenCache> {
+        self.inner.lock().unwrap().tokens.clone()
+    }
+
+    pub async fn set_tokens(&self, tokens: TokenCache) {
+        let mut inner = self.inner.lock().unwrap();
         inner.tokens = Some(tokens);
         inner.is_authenticated = true;
     }
 
     pub async fn get_tokens(&self) -> Option<TokenCache> {
-        self.inner.lock().await.tokens.clone()
-    }
-
-    pub fn get_tokens_blocking(&self) -> Option<TokenCache> {
-        self.inner.try_lock().unwrap().tokens.clone()
+        self.inner.lock().unwrap().tokens.clone()
     }
 
     pub async fn is_authenticated(&self) -> bool {
-        self.inner.lock().await.is_authenticated
+        self.inner.lock().unwrap().is_authenticated
     }
 
     pub async fn clear(&self) {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.inner.lock().unwrap();
         inner.tokens = None;
         inner.is_authenticated = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_response_converts_to_cache() {
+        let resp = SpotifyTokenResponse {
+            accessToken: "test_token".to_string(),
+            accessTokenExpirationTimestampMs: 9999999999000,
+        };
+        let cache = resp.into_token_cache();
+        assert_eq!(cache.access_token, "test_token");
+        assert_eq!(cache.refresh_token, "");
+        assert_eq!(cache.expires_at, 9999999999);
     }
 }

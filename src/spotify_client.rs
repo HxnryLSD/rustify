@@ -1,4 +1,4 @@
-use crate::config::{Config, PrivacyConfig};
+use crate::config::PrivacyConfig;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde::Deserialize;
 use std::time::Duration;
@@ -340,28 +340,5 @@ pub struct SavedTrack {
 impl Default for SpotifyClient {
     fn default() -> Self {
         Self::new().expect("failed to build SpotifyClient")
-    }
-}
-
-/// Convenience wrapper that loads config defaults and provides typed methods.
-pub struct SpotifyApi {
-    client: SpotifyClient,
-    config: Config,
-}
-
-impl SpotifyApi {
-    pub fn new(config: Config) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(Self {
-            client: SpotifyClient::new()?,
-            config,
-        })
-    }
-
-    pub fn access_token(&self) -> Option<String> {
-        self.config.privacy.private_session.then_some(String::new()) // placeholder; real token from AuthState
-    }
-
-    pub fn privacy(&self) -> &PrivacyConfig {
-        &self.config.privacy
     }
 }

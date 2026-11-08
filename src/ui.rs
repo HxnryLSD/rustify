@@ -3,7 +3,6 @@ use crate::{
     auth::{AuthState, SpotifyAuth},
     bandwidth_saver::BandwidthSaver,
     config::Config,
-    oauth_server::OAuthServer,
     privacy::Privacy,
     spotify_client::SpotifyClient,
 };
@@ -17,7 +16,6 @@ pub enum View {
     Player,
     Settings,
     Library,
-    CredentialsSetup,
 }
 
 /// Application state shared between the egui UI and backend services.
@@ -39,11 +37,6 @@ pub struct RustifyApp {
     // Playback
     pub is_playing: bool,
     pub current_track: Option<crate::spotify_client::Track>,
-
-    // Credentials setup fields
-    pub new_client_id: String,
-    pub new_client_secret: String,
-    pub new_redirect_url: String,
 }
 
 impl RustifyApp {
@@ -54,8 +47,6 @@ impl RustifyApp {
         } else {
             cc.egui_ctx.set_visuals(egui::Visuals::light());
         }
-
-        let redirect_url = config.auth.redirect_url.clone();
 
         Self {
             config,
@@ -71,52 +62,6 @@ impl RustifyApp {
             error_message: None,
             is_playing: false,
             current_track: None,
-            new_client_id: String::new(),
-            new_client_secret: String::new(),
-            new_redirect_url: redirect_url,
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Credentials setup view
-    // -----------------------------------------------------------------------
-    fn render_credentials_setup(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Spotify Developer Credentials");
-        ui.label(
-            "Rustify does not ship with Spotify credentials. Please enter your own\n\
-             Spotify Developer application Client ID and Client Secret.",
-        );
-        ui.separator();
-
-        ui.label("Client ID:");
-        ui.text_edit_singleline(&mut self.new_client_id);
-
-        ui.label("Client Secret:");
-        ui.text_edit_singleline(&mut self.new_client_secret);
-
-        ui.label("Redirect URI:");
-        ui.text_edit_singleline(&mut self.new_redirect_url);
-
-        ui.separator();
-
-        if ui.button("Save Credentials").clicked() {
-            if self.new_client_id.is_empty() || self.new_client_secret.is_empty() {
-                self.error_message = Some("Client ID and Client Secret are required".to_string());
-            } else {
-                self.config.auth.client_id = self.new_client_id.clone();
-                self.config.auth.client_secret = self.new_client_secret.clone();
-                self.config.auth.redirect_url = self.new_redirect_url.clone();
-                if let Err(e) = self.config.save() {
-                    self.error_message = Some(format!("Failed to save credentials: {e}"));
-                } else {
-                    self.error_message = None;
-                    self.current_view = View::Login;
-                }
-            }
-        }
-
-        if ui.button("Back").clicked() {
-            self.current_view = View::Login;
         }
     }
 
@@ -126,25 +71,19 @@ impl RustifyApp {
     fn render_login(&mut self, ui: &mut egui::Ui) {
         ui.vertical_centered(|ui| {
             ui.heading("Log in with Spotify");
+            ui.label("Paste your sp_dc cookie value from your browser's Spotify cookies.");
+            ui.label("No developer credentials needed.");
+            ui.separator();
 
-            // Show credentials setup link if not configured
-            if self.config.auth.client_id.is_empty() || self.config.auth.client_secret.is_empty() {
-                ui.label("No Spotify credentials configured yet.");
-                if ui.button("Set up credentials").clicked() {
-                    self.current_view = View::CredentialsSetup;
-                }
-                ui.separator();
-            }
+            ui.text_edit_singleline(&mut self.config.auth.sp_dc_cookie);
 
-            if ui.button("Authorize with Spotify").clicked() {
-                if self.config.auth.client_id.is_empty()
-                    || self.config.auth.client_secret.is_empty()
-                {
-                    self.error_message =
-                        Some("Please configure Spotify credentials first".to_string());
-                } else {
-                    self.start_oauth_flow();
+            if ui.button("Log in with sp_dc cookie").clicked() {
+                let sp_dc = self.config.auth.sp_dc_cookie.trim().to_string();
+                if sp_dc.is_empty() {
+                    self.error_message = Some("Please enter your sp_dc cookie.".to_string());
+                    return;
                 }
+                self.start_sp_dc_flow(sp_dc);
             }
 
             if let Some(err) = &self.error_message {
@@ -153,55 +92,49 @@ impl RustifyApp {
         });
     }
 
-    /// Begin the OAuth 2.0 authorization code flow: open the system browser
-    /// to the Spotify authorization URL and capture the callback automatically.
-    fn start_oauth_flow(&mut self) {
-        let auth = build_spotify_auth(&self.config);
-        let (auth_url, _csrf_state) = auth.authorize_url();
+    /// Begin the sp_dc cookie authentication flow: exchange the sp_dc cookie
+    /// for an access token via Spotify's token endpoint.
+    fn start_sp_dc_flow(&mut self, sp_dc_cookie: String) {
+        self.is_loading = true;
+        self.error_message = None;
 
-        // Parse the redirect port from the configured redirect URL.
-        let port = self
-            .config
-            .auth
-            .redirect_url
-            .split(':')
-            .nth(2)
-            .and_then(|s| s.split('/').next())
-            .and_then(|s| s.parse::<u16>().ok())
-            .unwrap_or(8888);
+        let auth_state = self.auth_state.clone();
+        let auth = SpotifyAuth::new(&sp_dc_cookie);
 
-        let server = OAuthServer::new(port);
-        match server.wait_for_callback(&auth_url) {
-            Ok(code) => {
-                // Exchange the code for tokens (blocking the UI thread is
-                // acceptable here; the user is waiting on the browser anyway).
-                let auth = build_spotify_auth(&self.config);
-                match std::thread::spawn(move || {
-                    tokio::runtime::Runtime::new()
-                        .unwrap()
-                        .block_on(auth.exchange_code(&code))
-                })
-                .join()
-                .unwrap()
-                {
-                    Ok(tokens) => {
-                        self.auth_state.set_tokens_blocking(tokens.clone());
-                        if let Err(e) = tokens.save() {
-                            self.error_message = Some(format!("Failed to cache tokens: {e}"));
-                        } else {
-                            self.error_message = None;
-                            self.current_view = View::Home;
-                        }
-                    }
-                    Err(e) => {
-                        self.error_message = Some(format!("Token exchange failed: {e}"));
-                    }
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let result = rt.block_on(auth.exchange_cookie_for_token());
+
+            match result {
+                Ok(tokens) => {
+                    auth_state.set_tokens_blocking(tokens.clone());
+                    let _ = tokens.save();
+                }
+                Err(e) => {
+                    let _ = e;
+                }
+            }
+        });
+
+        // Check result on next frame via is_loading / error_message
+        // (simplified synchronous approach for now)
+        let auth = SpotifyAuth::new(&sp_dc_cookie);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        match rt.block_on(auth.exchange_cookie_for_token()) {
+            Ok(tokens) => {
+                self.auth_state.set_tokens_blocking(tokens.clone());
+                if let Err(e) = tokens.save() {
+                    self.error_message = Some(format!("Failed to cache tokens: {e}"));
+                } else {
+                    self.error_message = None;
+                    self.current_view = View::Home;
                 }
             }
             Err(e) => {
-                self.error_message = Some(format!("OAuth callback failed: {e}"));
+                self.error_message = Some(format!("Token exchange failed: {e}"));
             }
         }
+        self.is_loading = false;
     }
 
     // -----------------------------------------------------------------------
@@ -336,36 +269,36 @@ impl RustifyApp {
                 }
             }
         } else {
-            if ui.button("Play").clicked() {
-                if let Some(track) = &self.current_track {
-                    let allowed = self
-                        .ad_blocker
-                        .is_ad_track(&track.name, &track.artists[0].name);
-                    if allowed {
-                        let tokens = match self.auth_state.get_tokens_blocking() {
-                            Some(t) => t,
-                            None => {
-                                self.error_message = Some("Not logged in.".to_string());
-                                return;
-                            }
-                        };
-                        let uris = vec![format!("spotify:track:{}", track.id)];
-                        let client = self.spotify_client.clone();
-                        let privacy = self.config.privacy.clone();
-                        match std::thread::spawn(move || {
-                            tokio::runtime::Runtime::new()
-                                .unwrap()
-                                .block_on(client.play(&tokens.access_token, &privacy, Some(&uris)))
-                        })
-                        .join()
-                        .unwrap()
-                        {
-                            Ok(_) => self.is_playing = true,
-                            Err(e) => self.error_message = Some(format!("Play failed: {e}")),
+            if ui.button("Play").clicked()
+                && let Some(track) = &self.current_track
+            {
+                let allowed = self
+                    .ad_blocker
+                    .is_ad_track(&track.name, &track.artists[0].name);
+                if allowed {
+                    let tokens = match self.auth_state.get_tokens_blocking() {
+                        Some(t) => t,
+                        None => {
+                            self.error_message = Some("Not logged in.".to_string());
+                            return;
                         }
-                    } else {
-                        self.error_message = Some("Track blocked by ad blocker".to_string());
+                    };
+                    let uris = vec![format!("spotify:track:{}", track.id)];
+                    let client = self.spotify_client.clone();
+                    let privacy = self.config.privacy.clone();
+                    match std::thread::spawn(move || {
+                        tokio::runtime::Runtime::new()
+                            .unwrap()
+                            .block_on(client.play(&tokens.access_token, &privacy, Some(&uris)))
+                    })
+                    .join()
+                    .unwrap()
+                    {
+                        Ok(_) => self.is_playing = true,
+                        Err(e) => self.error_message = Some(format!("Play failed: {e}")),
                     }
+                } else {
+                    self.error_message = Some("Track blocked by ad blocker".to_string());
                 }
             }
         }
@@ -439,10 +372,10 @@ impl RustifyApp {
         ui.label(format!("Volume: {:.0}%", self.config.audio.volume * 100.0));
         ui.add(egui::Slider::new(&mut self.config.audio.volume, 0.0..=1.0));
 
-        if ui.button("Save").clicked() {
-            if let Err(e) = self.config.save() {
-                self.error_message = Some(format!("Failed to save config: {e}"));
-            }
+        if ui.button("Save").clicked()
+            && let Err(e) = self.config.save()
+        {
+            self.error_message = Some(format!("Failed to save config: {e}"));
         }
 
         if ui.button("Back").clicked() {
@@ -480,7 +413,6 @@ impl eframe::App for RustifyApp {
                 View::Player => self.render_player(ui),
                 View::Settings => self.render_settings(ui),
                 View::Library => self.render_library(ui),
-                View::CredentialsSetup => self.render_credentials_setup(ui),
             }
 
             if let Some(err) = &self.error_message {
@@ -491,13 +423,4 @@ impl eframe::App for RustifyApp {
         // Request repaint so loading states animate smoothly
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }
-}
-
-/// Build a SpotifyAuth from the user-configured credentials.
-fn build_spotify_auth(config: &Config) -> SpotifyAuth {
-    SpotifyAuth::new(
-        &config.auth.client_id,
-        &config.auth.client_secret,
-        &config.auth.redirect_url,
-    )
 }

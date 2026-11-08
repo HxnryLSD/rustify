@@ -1,21 +1,20 @@
 use eframe::egui;
 use rustify::{
-    auth::{AuthState, SpotifyAuth},
+    auth::AuthState,
     config::{Config, TokenCache},
-    ui::{RustifyApp, View},
+    ui::RustifyApp,
 };
 
 fn main() -> eframe::Result {
-    // Load configuration (includes user-provided Spotify OAuth credentials)
+    // Load configuration (includes user-provided sp_dc cookie)
     let config = Config::load();
 
-    // Load cached tokens if present
+    // Load cached tokens if present and apply them to auth state
     let auth_state = AuthState::new();
-    if let Some(tokens) = TokenCache::load() {
-        if !tokens.is_expired() {
-            // Cached tokens will be applied to auth_state during login flow initialization
-            let _ = tokens;
-        }
+    if let Some(tokens) = TokenCache::load()
+        && !tokens.is_expired()
+    {
+        auth_state.set_tokens_blocking(tokens);
     }
 
     // eframe/egui native options
@@ -39,22 +38,4 @@ fn main() -> eframe::Result {
             Ok(Box::new(RustifyApp::new(cc, config, auth_state)))
         }),
     )
-}
-
-/// Build a SpotifyAuth from the user-configured credentials.
-fn build_spotify_auth(config: &Config) -> SpotifyAuth {
-    SpotifyAuth::new(
-        &config.auth.client_id,
-        &config.auth.client_secret,
-        &config.auth.redirect_url,
-    )
-}
-
-/// Convenience: returns the initial view based on whether credentials are configured.
-pub fn initial_view(config: &Config) -> View {
-    if config.auth.client_id.is_empty() || config.auth.client_secret.is_empty() {
-        View::Login // credentials setup first
-    } else {
-        View::Login
-    }
 }
