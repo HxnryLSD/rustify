@@ -13,7 +13,7 @@
 
 - [ ] Scaffold Rust project (`Cargo.toml`, `src/main.rs`, module files)
 - [ ] Config loading/saving (`config.rs`)
-- [ ] OAuth 2.0 login flow (`auth.rs`)
+- [ ] sp_dc cookie login flow (`auth.rs`)
 - [ ] Basic Spotify API client (`spotify_client.rs`)
 - [ ] egui UI shell: login, home, search views (`ui.rs`)
 - [ ] Basic audio playback via rodio (`audio_player.rs`)

@@ -11,7 +11,7 @@ src/
   main.rs          — eframe/egui entry point, app loop
   lib.rs           — public crate exports
   config.rs        — Config struct, TOML persistence, defaults
-  auth.rs          — OAuth 2.0 flow, token storage & refresh
+  auth.rs          — sp_dc cookie exchange, token storage
   spotify_client.rs — Spotify Web API client (reqwest + serde)
   ad_blocker.rs    — ad domain/pattern matching, stream interception
   audio_player.rs  — rodio playback, stream handling

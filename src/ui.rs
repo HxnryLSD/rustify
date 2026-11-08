@@ -7,6 +7,7 @@ use crate::{
     spotify_client::SpotifyClient,
 };
 use eframe::egui;
+use tokio::sync::oneshot;
 
 /// Application navigation views.
 pub enum View {
@@ -37,6 +38,12 @@ pub struct RustifyApp {
     // Playback
     pub is_playing: bool,
     pub current_track: Option<crate::spotify_client::Track>,
+
+    // Non-blocking async runtime for Spotify calls without freezing the egui thread
+    pub tokio_runtime: Option<tokio::runtime::Runtime>,
+
+    // Pending async operation receivers (polled each frame in update())
+    pub pending_search: Option<oneshot::Receiver<Result<Vec<crate::spotify_client::Track>, String>>>,
 }
 
 impl RustifyApp {
@@ -62,6 +69,8 @@ impl RustifyApp {
             error_message: None,
             is_playing: false,
             current_track: None,
+            tokio_runtime: tokio::runtime::Runtime::new().ok(),
+            pending_search: None,
         }
     }
 
@@ -94,6 +103,8 @@ impl RustifyApp {
 
     /// Begin the sp_dc cookie authentication flow: exchange the sp_dc cookie
     /// for an access token via Spotify's token endpoint.
+    ///
+    /// Runs on the stored tokio runtime so the egui thread is not blocked.
     fn start_sp_dc_flow(&mut self, sp_dc_cookie: String) {
         self.is_loading = true;
         self.error_message = None;
@@ -101,11 +112,14 @@ impl RustifyApp {
         let auth_state = self.auth_state.clone();
         let auth = SpotifyAuth::new(&sp_dc_cookie);
 
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            let result = rt.block_on(auth.exchange_cookie_for_token());
+        let Some(rt) = &self.tokio_runtime else {
+            self.is_loading = false;
+            self.error_message = Some("Async runtime unavailable".to_string());
+            return;
+        };
 
-            match result {
+        rt.spawn(async move {
+            match auth.exchange_cookie_for_token().await {
                 Ok(tokens) => {
                     auth_state.set_tokens_blocking(tokens.clone());
                     let _ = tokens.save();
@@ -115,26 +129,19 @@ impl RustifyApp {
                 }
             }
         });
+    }
 
-        // Check result on next frame via is_loading / error_message
-        // (simplified synchronous approach for now)
-        let auth = SpotifyAuth::new(&sp_dc_cookie);
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        match rt.block_on(auth.exchange_cookie_for_token()) {
-            Ok(tokens) => {
-                self.auth_state.set_tokens_blocking(tokens.clone());
-                if let Err(e) = tokens.save() {
-                    self.error_message = Some(format!("Failed to cache tokens: {e}"));
-                } else {
-                    self.error_message = None;
-                    self.current_view = View::Home;
-                }
-            }
-            Err(e) => {
-                self.error_message = Some(format!("Token exchange failed: {e}"));
-            }
+    /// Poll the auth state on each egui frame: if a token has arrived,
+    /// transition to the Home view and clear the loading flag.
+    fn poll_auth_state(&mut self) {
+        if self.is_loading
+            && self.auth_state.is_authenticated_blocking()
+            && self.auth_state.get_tokens_blocking().is_some()
+        {
+            self.is_loading = false;
+            self.error_message = None;
+            self.current_view = View::Home;
         }
-        self.is_loading = false;
     }
 
     // -----------------------------------------------------------------------
@@ -183,25 +190,20 @@ impl RustifyApp {
             self.is_loading = true;
             self.error_message = None;
 
-            // Run the Spotify search on a blocking tokio runtime.
+            // Run the Spotify search on the stored tokio runtime (non-blocking).
             let client = self.spotify_client.clone();
             let privacy = self.config.privacy.clone();
-            match std::thread::spawn(move || {
-                tokio::runtime::Runtime::new()
-                    .unwrap()
-                    .block_on(client.search(&tokens.access_token, &privacy, &query, "track", 20))
-            })
-            .join()
-            .unwrap()
-            {
-                Ok(response) => {
-                    self.search_results = response.tracks.map(|t| t.items).unwrap_or_default();
-                }
-                Err(e) => {
-                    self.error_message = Some(format!("Search failed: {e}"));
-                }
-            }
-            self.is_loading = false;
+            let (tx, rx) = oneshot::channel();
+            let Some(rt) = &self.tokio_runtime else {
+                self.is_loading = false;
+                self.error_message = Some("Async runtime unavailable".to_string());
+                return;
+            };
+            rt.spawn(async move {
+                let result = client.search(&tokens.access_token, &privacy, &query, "track", 20).await;
+                let _ = tx.send(result.map(|r| r.tracks.map(|t| t.items).unwrap_or_default()).map_err(|e| e.to_string()));
+            });
+            self.pending_search = Some(rx);
         }
         if self.is_loading {
             ui.label("Loading...");
@@ -256,17 +258,15 @@ impl RustifyApp {
                 };
                 let client = self.spotify_client.clone();
                 let privacy = self.config.privacy.clone();
-                match std::thread::spawn(move || {
-                    tokio::runtime::Runtime::new()
-                        .unwrap()
-                        .block_on(client.pause(&tokens.access_token, &privacy))
-                })
-                .join()
-                .unwrap()
-                {
-                    Ok(_) => self.is_playing = false,
-                    Err(e) => self.error_message = Some(format!("Pause failed: {e}")),
-                }
+                let Some(rt) = &self.tokio_runtime else {
+                    self.error_message = Some("Async runtime unavailable".to_string());
+                    return;
+                };
+                let access_token = tokens.access_token.clone();
+                rt.spawn(async move {
+                    let _ = client.pause(&access_token, &privacy).await;
+                });
+                self.is_playing = false;
             }
         } else {
             if ui.button("Play").clicked()
@@ -286,17 +286,15 @@ impl RustifyApp {
                     let uris = vec![format!("spotify:track:{}", track.id)];
                     let client = self.spotify_client.clone();
                     let privacy = self.config.privacy.clone();
-                    match std::thread::spawn(move || {
-                        tokio::runtime::Runtime::new()
-                            .unwrap()
-                            .block_on(client.play(&tokens.access_token, &privacy, Some(&uris)))
-                    })
-                    .join()
-                    .unwrap()
-                    {
-                        Ok(_) => self.is_playing = true,
-                        Err(e) => self.error_message = Some(format!("Play failed: {e}")),
-                    }
+                    let Some(rt) = &self.tokio_runtime else {
+                        self.error_message = Some("Async runtime unavailable".to_string());
+                        return;
+                    };
+                    let access_token = tokens.access_token.clone();
+                    rt.spawn(async move {
+                        let _ = client.play(&access_token, &privacy, Some(&uris)).await;
+                    });
+                    self.is_playing = true;
                 } else {
                     self.error_message = Some("Track blocked by ad blocker".to_string());
                 }
@@ -312,17 +310,14 @@ impl RustifyApp {
             };
             let client = self.spotify_client.clone();
             let privacy = self.config.privacy.clone();
-            match std::thread::spawn(move || {
-                tokio::runtime::Runtime::new()
-                    .unwrap()
-                    .block_on(client.next_track(&tokens.access_token, &privacy))
-            })
-            .join()
-            .unwrap()
-            {
-                Ok(_) => {}
-                Err(e) => self.error_message = Some(format!("Next failed: {e}")),
-            }
+            let Some(rt) = &self.tokio_runtime else {
+                self.error_message = Some("Async runtime unavailable".to_string());
+                return;
+            };
+            let access_token = tokens.access_token.clone();
+            rt.spawn(async move {
+                let _ = client.next_track(&access_token, &privacy).await;
+            });
         }
         if ui.button("Back").clicked() {
             self.current_view = View::Home;
@@ -397,6 +392,31 @@ impl RustifyApp {
 
 impl eframe::App for RustifyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Poll auth state so login transitions to Home once the token arrives
+        self.poll_auth_state();
+
+        // Poll pending async search results (non-blocking)
+        if let Some(mut rx) = self.pending_search.take() {
+            match rx.try_recv() {
+                Ok(Ok(tracks)) => {
+                    self.search_results = tracks;
+                    self.is_loading = false;
+                }
+                Ok(Err(e)) => {
+                    self.error_message = Some(format!("Search failed: {e}"));
+                    self.is_loading = false;
+                }
+                Err(oneshot::error::TryRecvError::Empty) => {
+                    // Still pending — put it back and keep loading
+                    self.pending_search = Some(rx);
+                }
+                Err(oneshot::error::TryRecvError::Closed) => {
+                    self.error_message = Some("Search task was cancelled".to_string());
+                    self.is_loading = false;
+                }
+            }
+        }
+
         // Apply bandwidth saver: disable animations when enabled
         if self.bandwidth_saver.should_disable_animations() {
             // egui has no global animation toggle; we simply avoid animated widgets.

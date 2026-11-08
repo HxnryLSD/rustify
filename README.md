@@ -19,7 +19,7 @@ Rustify lets you browse, search, and play Spotify music without the bloat of the
 - **GUI:** egui + eframe (immediate-mode, lightweight)
 - **Audio:** rodio (cross-platform playback)
 - **HTTP:** reqwest
-- **Auth:** OAuth 2.0 (authorization code flow)
+- **Auth:** sp_dc cookie exchange (no client_id/secret needed)
 - **Async:** tokio
 
 ## Getting Started

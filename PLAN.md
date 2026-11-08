@@ -2,7 +2,7 @@
 
 ## Summary
 
-Rustify is a lightweight unofficial Spotify client written in Rust, targeting Linux, Windows, and macOS. It uses **egui** for the UI, **rodio** for audio playback, and **OAuth 2.0** for Spotify user authentication. Core differentiators: full ad blocking (audio/banner/video), privacy enforcement (private session, no logging, minimal telemetry), and an Extreme Bandwidth Saver Mode (disables images, animations, non-essential rendering).
+Rustify is a lightweight unofficial Spotify client written in Rust, targeting Linux, Windows, and macOS. It uses **egui** for the UI, **rodio** for audio playback, and **sp_dc cookie authentication** for Spotify user authentication. Core differentiators: full ad blocking (audio/banner/video), privacy enforcement (private session, no logging, minimal telemetry), and an Extreme Bandwidth Saver Mode (disables images, animations, non-essential rendering).
 
 This plan covers the documentation phase (markdown files) requested by the user, plus the scaffolding and implementation roadmap.
 
@@ -10,8 +10,8 @@ This plan covers the documentation phase (markdown files) requested by the user,
 
 - Project root: `/home/richter/Desktop/Rustify` — empty directory.
 - No existing code, Cargo.toml, or source files.
-- Chosen stack: Rust + egui (GUI), rodio (audio), reqwest (HTTP), serde (JSON), oauth2 (OAuth flow), tokio (async runtime).
-- User decisions: egui UI, rodio audio, OAuth 2.0 user login, cross-platform (Linux/Windows/macOS).
+- Chosen stack: Rust + egui (GUI), rodio (audio), reqwest (HTTP), serde (JSON), tokio (async runtime).
+- User decisions: egui UI, rodio audio, sp_dc cookie login, cross-platform (Linux/Windows/macOS).
 
 ## System Impact
 
@@ -21,7 +21,7 @@ This plan covers the documentation phase (markdown files) requested by the user,
 - OAuth token cache stored locally (`tokens.json`) for session persistence.
 
 ### Data flow
-1. User logs in via OAuth 2.0 → access/refresh tokens stored locally.
+1. User logs in via sp_dc cookie → access token stored locally.
 2. Spotify API client (reqwest + serde) fetches track/playlist/library data.
 3. Audio URLs resolved via Spotify API → decoded/played via rodio.
 4. Ad blocker intercepts ad-related API responses and ad audio streams before playback.
@@ -69,11 +69,11 @@ Documentation-first: write all markdown specs before code, so the implementation
 - `PLAN.md` — this file (implementation roadmap).
 
 ### Implementation files (future phases)
-- `Cargo.toml` — dependencies: egui, eframe, rodio, reqwest, serde, serde_json, oauth2, tokio, toml, dirs.
+- `Cargo.toml` — dependencies: egui, eframe, rodio, reqwest, serde, serde_json, tokio, toml, dirs.
 - `src/main.rs` — egui application entry point.
 - `src/lib.rs` — public crate exports.
 - `src/config.rs` — Config struct, TOML load/save, defaults.
-- `src/auth.rs` — OAuth 2.0 authorization code flow, token storage/refresh.
+- `src/auth.rs` — sp_dc cookie exchange for access token, token storage.
 - `src/spotify_client.rs` — Spotify Web API client (reqwest + serde).
 - `src/ad_blocker.rs` — ad domain/pattern matching, stream interception.
 - `src/audio_player.rs` — rodio playback, stream handling, ad-filtered playback.

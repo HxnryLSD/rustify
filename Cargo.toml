@@ -30,14 +30,5 @@ dirs = "5.0"
 # URL parsing
 url = "2.5"
 
-[target.'cfg(target_os = "linux")'.dependencies]
-# Linux-specific if needed
-
-[target.'cfg(target_os = "windows")'.dependencies]
-# Windows-specific if needed
-
-[target.'cfg(target_os = "macos")'.dependencies]
-# macOS-specific if needed
-
 [profile.release]
 opt-level = 3

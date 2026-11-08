@@ -2,27 +2,15 @@
 
 ## Authentication
 
-Rustify uses OAuth 2.0 Authorization Code Flow with PKCE (recommended for public clients).
+Rustify uses the Spotify `sp_dc` browser cookie to obtain an access token. No Spotify Developer Dashboard registration, no `client_id`, no `client_secret`, and no OAuth Authorization Code Flow are required.
 
-### Scopes requested
-- `user-read-private` — read user profile
-- `user-read-email` — read user email
-- `user-library-read` — read saved tracks/albums
-- `user-library-modify` — save/remove tracks/albums
-- `playlist-read-private` — read private playlists
-- `playlist-modify-private` — modify private playlists
-- `user-read-playback-state` — read current playback
-- `user-modify-playback-state` — control playback
-- `user-read-currently-playing` — read currently playing track
-- `streaming` — enable playback via Web Playback SDK (conceptual; Rustify uses its own audio path)
-
-### Flow
-1. User clicks "Log in" → egui opens system browser at Spotify accounts authorization URL.
-2. User grants permission → Spotify redirects to `http://localhost:8888/callback` with `code`.
-3. Rustify's local callback listener captures `code`.
-4. `auth.rs` exchanges `code` for `access_token` + `refresh_token`.
-5. Tokens saved to `tokens.json`; access token used for all API requests.
-6. On 401 (expired), `auth.rs` refreshes using `refresh_token`.
+### How it works
+1. User copies their `sp_dc` cookie value from their browser's Spotify cookies.
+2. User pastes it into Rustify's login screen.
+3. `auth.rs` (`SpotifyAuth::exchange_cookie_for_token`) POSTs the cookie to Spotify's `https://open.spotify.com/get_access_token` endpoint.
+4. The response contains an `accessToken` and `accessTokenExpirationTimestampMs`, which are cached to `tokens.json`.
+5. The access token is used as `Authorization: Bearer <token>` for all Spotify Web API requests.
+6. When the token expires, Rustify re-exchanges the `sp_dc` cookie for a new token (the `sp_dc` flow does not issue refresh tokens).
 
 ## Spotify Web API Endpoints Used
 

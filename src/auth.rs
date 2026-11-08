@@ -106,6 +106,10 @@ impl AuthState {
         self.inner.lock().unwrap().tokens.clone()
     }
 
+    pub fn is_authenticated_blocking(&self) -> bool {
+        self.inner.lock().unwrap().is_authenticated
+    }
+
     pub async fn is_authenticated(&self) -> bool {
         self.inner.lock().unwrap().is_authenticated
     }
