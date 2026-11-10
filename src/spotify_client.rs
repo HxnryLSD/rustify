@@ -53,6 +53,14 @@ impl SpotifyClient {
             .client
             .get(&url)
             .headers(self.default_headers(access_token, privacy))
+            .query(&[(
+                "private_session",
+                if privacy.private_session {
+                    "true"
+                } else {
+                    "false"
+                },
+            )])
             .send()
             .await?
             .error_for_status()?;
@@ -187,7 +195,7 @@ impl SpotifyClient {
             .query(&[
                 ("q", q),
                 ("type", r#type),
-                ("limit", &limit.to_string()),
+                ("limit", limit.to_string().as_str()),
                 (
                     "private_session",
                     if privacy.private_session {
@@ -235,7 +243,17 @@ impl SpotifyClient {
             .client
             .get(&url)
             .headers(self.default_headers(access_token, privacy))
-            .query(&[("limit", &limit.to_string())])
+            .query(&[
+                ("limit", limit.to_string().as_str()),
+                (
+                    "private_session",
+                    if privacy.private_session {
+                        "true"
+                    } else {
+                        "false"
+                    },
+                ),
+            ])
             .send()
             .await?
             .error_for_status()?;

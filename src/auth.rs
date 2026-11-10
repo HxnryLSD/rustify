@@ -79,6 +79,7 @@ pub struct AuthState {
 pub struct AuthStateInner {
     pub tokens: Option<TokenCache>,
     pub is_authenticated: bool,
+    pub last_error: Option<String>,
 }
 
 impl AuthState {
@@ -110,11 +111,31 @@ impl AuthState {
         self.inner.lock().unwrap().is_authenticated
     }
 
+    pub fn set_error_blocking(&self, error: String) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.last_error = Some(error);
+    }
+
+    pub fn get_error_blocking(&self) -> Option<String> {
+        self.inner.lock().unwrap().last_error.clone()
+    }
+
+    pub fn clear_error_blocking(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.last_error = None;
+    }
+
     pub async fn is_authenticated(&self) -> bool {
         self.inner.lock().unwrap().is_authenticated
     }
 
     pub async fn clear(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.tokens = None;
+        inner.is_authenticated = false;
+    }
+
+    pub fn clear_blocking(&self) {
         let mut inner = self.inner.lock().unwrap();
         inner.tokens = None;
         inner.is_authenticated = false;

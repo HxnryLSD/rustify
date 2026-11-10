@@ -45,6 +45,10 @@ pub struct RustifyApp {
     // Pending async operation receivers (polled each frame in update())
     pub pending_search:
         Option<oneshot::Receiver<Result<Vec<crate::spotify_client::Track>, String>>>,
+
+    // Pending async playback state receiver (polled each frame in update())
+    pub pending_playback:
+        Option<oneshot::Receiver<Result<Option<crate::spotify_client::PlaybackState>, String>>>,
 }
 
 impl RustifyApp {
@@ -72,6 +76,7 @@ impl RustifyApp {
             current_track: None,
             tokio_runtime: tokio::runtime::Runtime::new().ok(),
             pending_search: None,
+            pending_playback: None,
         }
     }
 
@@ -126,7 +131,7 @@ impl RustifyApp {
                     let _ = tokens.save();
                 }
                 Err(e) => {
-                    let _ = e;
+                    auth_state.set_error_blocking(e.to_string());
                 }
             }
         });
@@ -142,6 +147,11 @@ impl RustifyApp {
             self.is_loading = false;
             self.error_message = None;
             self.current_view = View::Home;
+        }
+        if let Some(err) = self.auth_state.get_error_blocking() {
+            self.is_loading = false;
+            self.error_message = Some(err);
+            self.auth_state.clear_error_blocking();
         }
     }
 
@@ -164,11 +174,8 @@ impl RustifyApp {
             self.current_view = View::Settings;
         }
         if ui.button("Logout").clicked() {
-            // Clear tokens and return to login
-            let auth_state = self.auth_state.clone();
-            // Cannot await here synchronously; clear flag only.
+            self.auth_state.clear_blocking();
             self.current_view = View::Login;
-            let _ = auth_state;
         }
     }
 
@@ -215,7 +222,8 @@ impl RustifyApp {
         if self.is_loading {
             ui.label("Loading...");
         }
-        for track in &self.search_results {
+        for i in 0..self.search_results.len() {
+            let track = &self.search_results[i];
             ui.label(format!("{} - {}", track.name, track.artists[0].name));
             let track_name = track.name.clone();
             let artist_name = track
@@ -223,19 +231,39 @@ impl RustifyApp {
                 .first()
                 .map(|a| a.name.clone())
                 .unwrap_or_default();
-            if ui.button("Play").clicked() {
-                let allowed = self.ad_blocker.is_ad_track(&track_name, &artist_name);
-                if allowed {
-                    self.current_track = Some(track.clone());
-                    self.is_playing = true;
-                } else {
-                    self.error_message = Some("Track blocked by ad blocker".to_string());
-                }
+            let play_clicked = ui.button("Play").clicked();
+            let allowed = self.ad_blocker.is_ad_track(&track_name, &artist_name);
+            if play_clicked && allowed {
+                self.current_track = Some(track.clone());
+                self.is_playing = true;
+                self.start_playback_state_poll();
+            } else if play_clicked && !allowed {
+                self.error_message = Some("Track blocked by ad blocker".to_string());
             }
         }
         if ui.button("Back").clicked() {
             self.current_view = View::Home;
         }
+    }
+
+    /// Spawn a playback state fetch on the stored tokio runtime.
+    fn start_playback_state_poll(&mut self) {
+        let Some(tokens) = self.auth_state.get_tokens_blocking() else {
+            return;
+        };
+        let client = self.spotify_client.clone();
+        let privacy = self.config.privacy.clone();
+        let (tx, rx) = oneshot::channel();
+        let Some(rt) = &self.tokio_runtime else {
+            return;
+        };
+        rt.spawn(async move {
+            let result = client
+                .get_playback_state(&tokens.access_token, &privacy)
+                .await;
+            let _ = tx.send(result.map_err(|e| e.to_string()));
+        });
+        self.pending_playback = Some(rx);
     }
 
     // -----------------------------------------------------------------------
@@ -302,6 +330,7 @@ impl RustifyApp {
                         let _ = client.play(&access_token, &privacy, Some(&uris)).await;
                     });
                     self.is_playing = true;
+                    self.start_playback_state_poll();
                 } else {
                     self.error_message = Some("Track blocked by ad blocker".to_string());
                 }
@@ -325,6 +354,7 @@ impl RustifyApp {
             rt.spawn(async move {
                 let _ = client.next_track(&access_token, &privacy).await;
             });
+            self.start_playback_state_poll();
         }
         if ui.button("Back").clicked() {
             self.current_view = View::Home;
@@ -420,6 +450,38 @@ impl eframe::App for RustifyApp {
                 Err(oneshot::error::TryRecvError::Closed) => {
                     self.error_message = Some("Search task was cancelled".to_string());
                     self.is_loading = false;
+                }
+            }
+        }
+
+        // Poll pending async playback state updates (non-blocking)
+        if let Some(mut rx) = self.pending_playback.take() {
+            match rx.try_recv() {
+                Ok(Ok(Some(state))) => {
+                    self.is_playing = state.is_playing;
+                    if let Some(item) = state.item {
+                        self.current_track = Some(crate::spotify_client::Track {
+                            id: item.id,
+                            name: item.name,
+                            artists: item.artists,
+                            album: item.album,
+                            duration_ms: item.duration_ms,
+                            preview_url: item.preview_url,
+                        });
+                    }
+                }
+                Ok(Ok(None)) => {
+                    self.is_playing = false;
+                    self.current_track = None;
+                }
+                Ok(Err(e)) => {
+                    self.error_message = Some(format!("Playback state error: {e}"));
+                }
+                Err(oneshot::error::TryRecvError::Empty) => {
+                    self.pending_playback = Some(rx);
+                }
+                Err(oneshot::error::TryRecvError::Closed) => {
+                    self.error_message = Some("Playback state task was cancelled".to_string());
                 }
             }
         }
