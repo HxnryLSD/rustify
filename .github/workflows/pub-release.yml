@@ -33,7 +33,27 @@ jobs:
     name: Check (Linux)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    outputs:
+      tag: ${{ steps.target.outputs.tag }}
     steps:
+      # Work out which tag to publish, before anything expensive runs.
+      # Without this a manual run would publish a release tagged with the
+      # branch name.
+      - name: Work out the release tag
+        id: target
+        run: |
+          tag="${{ inputs.tag }}"
+          if [ -z "$tag" ]; then tag="${GITHUB_REF_NAME}"; fi
+          case "$tag" in
+            v[0-9]*)
+              echo "tag=$tag" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::No release tag. Push a tag that starts with v, or give the tag input."
+              exit 1
+              ;;
+          esac
+
       - name: Checkout repository
         uses: actions/checkout@v5
 
@@ -89,7 +109,7 @@ jobs:
           tar -czf rustify-linux-x86_64.tar.gz -C dist/linux-x86_64 rustify
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: rustify-linux-x86_64-release
           path: rustify-linux-x86_64.tar.gz
@@ -117,7 +137,7 @@ jobs:
           7z a rustify-windows-x86_64.zip dist/windows-x86_64/rustify.exe
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: rustify-windows-x86_64-release
           path: rustify-windows-x86_64.zip
@@ -145,7 +165,7 @@ jobs:
           tar -czf rustify-macos-aarch64.tar.gz -C dist/macos-aarch64 rustify
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: rustify-macos-aarch64-release
           path: rustify-macos-aarch64.tar.gz
@@ -173,7 +193,7 @@ jobs:
           tar -czf rustify-macos-x86_64.tar.gz -C dist/macos-x86_64 rustify
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: rustify-macos-x86_64-release
           path: rustify-macos-x86_64.tar.gz
@@ -181,43 +201,26 @@ jobs:
 
   release-create:
     name: Create GitHub Release
-    needs: [release-linux, release-windows, release-macos, release-macos-intel]
+    needs: [check, release-linux, release-windows, release-macos, release-macos-intel]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
-      # Work out which tag to publish. Without this a manual run would
-      # publish a release tagged with the branch name.
-      - name: Work out the release tag
-        id: target
-        run: |
-          tag="${{ inputs.tag }}"
-          if [ -z "$tag" ]; then tag="${GITHUB_REF_NAME}"; fi
-          case "$tag" in
-            v[0-9]*)
-              echo "tag=$tag" >> "$GITHUB_OUTPUT"
-              ;;
-            *)
-              echo "::error::No release tag. Push a tag that starts with v, or give the tag input."
-              exit 1
-              ;;
-          esac
-
       - name: Download all artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           path: release-artifacts
 
       - name: Create or update release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ steps.target.outputs.tag }}
-          name: ${{ steps.target.outputs.tag }}
+          tag_name: ${{ needs.check.outputs.tag }}
+          name: ${{ needs.check.outputs.tag }}
           body: |
-            Rustify ${{ steps.target.outputs.tag }}.
+            Rustify ${{ needs.check.outputs.tag }}.
 
             - Linux x86_64: `rustify-linux-x86_64.tar.gz`
             - Windows x86_64: `rustify-windows-x86_64.zip`

@@ -79,7 +79,7 @@ jobs:
           tar -czf rustify-linux-x86_64.tar.gz -C dist/linux-x86_64 rustify
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: rustify-linux-x86_64-prerelease
           path: rustify-linux-x86_64.tar.gz
@@ -107,7 +107,7 @@ jobs:
           7z a rustify-windows-x86_64.zip dist/windows-x86_64/rustify.exe
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: rustify-windows-x86_64-prerelease
           path: rustify-windows-x86_64.zip
@@ -135,7 +135,7 @@ jobs:
           tar -czf rustify-macos-aarch64.tar.gz -C dist/macos-aarch64 rustify
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: rustify-macos-aarch64-prerelease
           path: rustify-macos-aarch64.tar.gz
@@ -163,7 +163,7 @@ jobs:
           tar -czf rustify-macos-x86_64.tar.gz -C dist/macos-x86_64 rustify
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: rustify-macos-x86_64-prerelease
           path: rustify-macos-x86_64.tar.gz
@@ -178,12 +178,12 @@ jobs:
       contents: write
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           path: prerelease-artifacts
 
       - name: Create or update prerelease
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
