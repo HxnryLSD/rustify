@@ -1,14 +1,28 @@
 name: Release
 
+# A release is cut by pushing a tag that starts with "v". The workflow
+# builds every platform and attaches the binaries to that tag.
+#
+# The manual trigger re-runs the build for a tag that already exists.
 on:
-  release:
-    types: [published]
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "The tag to publish, for example v1.0.0"
+        required: true
+        type: string
 
+# The build jobs only need to read the repository. Write access is granted
+# to the job that publishes the release.
 permissions:
-  contents: write
+  contents: read
+
+# A release must never be cancelled half way through.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -18,9 +32,10 @@ jobs:
   check:
     name: Check (Linux)
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -30,7 +45,7 @@ jobs:
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libgtk-3-dev
+          sudo apt-get install -y libasound2-dev
 
       - name: Check formatting
         run: cargo fmt --check
@@ -41,16 +56,20 @@ jobs:
       - name: Test
         run: cargo test --locked
 
+      # These reach Spotify and YouTube. They are advisory here: a third
+      # party's outage must not stop a release that has already been decided.
       - name: Test against the live Spotify and YouTube APIs
+        continue-on-error: true
         run: cargo test --locked -- --ignored
 
   release-linux:
     name: Linux (x86_64) Release
     runs-on: ubuntu-24.04
     needs: check
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -58,7 +77,7 @@ jobs:
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libgtk-3-dev
+          sudo apt-get install -y libasound2-dev
 
       - name: Build release binary
         run: cargo build --release --locked
@@ -70,7 +89,7 @@ jobs:
           tar -czf rustify-linux-x86_64.tar.gz -C dist/linux-x86_64 rustify
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: rustify-linux-x86_64-release
           path: rustify-linux-x86_64.tar.gz
@@ -80,9 +99,10 @@ jobs:
     name: Windows (x86_64) Release
     runs-on: windows-2022
     needs: check
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -97,7 +117,7 @@ jobs:
           7z a rustify-windows-x86_64.zip dist/windows-x86_64/rustify.exe
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: rustify-windows-x86_64-release
           path: rustify-windows-x86_64.zip
@@ -107,9 +127,10 @@ jobs:
     name: macOS (Apple Silicon) Release
     runs-on: macos-15
     needs: check
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -124,7 +145,7 @@ jobs:
           tar -czf rustify-macos-aarch64.tar.gz -C dist/macos-aarch64 rustify
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: rustify-macos-aarch64-release
           path: rustify-macos-aarch64.tar.gz
@@ -134,9 +155,10 @@ jobs:
     name: macOS (Intel) Release
     runs-on: macos-15-intel
     needs: check
+    timeout-minutes: 40
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -151,7 +173,7 @@ jobs:
           tar -czf rustify-macos-x86_64.tar.gz -C dist/macos-x86_64 rustify
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: rustify-macos-x86_64-release
           path: rustify-macos-x86_64.tar.gz
@@ -161,9 +183,29 @@ jobs:
     name: Create GitHub Release
     needs: [release-linux, release-windows, release-macos, release-macos-intel]
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
+      # Work out which tag to publish. Without this a manual run would
+      # publish a release tagged with the branch name.
+      - name: Work out the release tag
+        id: target
+        run: |
+          tag="${{ inputs.tag }}"
+          if [ -z "$tag" ]; then tag="${GITHUB_REF_NAME}"; fi
+          case "$tag" in
+            v[0-9]*)
+              echo "tag=$tag" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::No release tag. Push a tag that starts with v, or give the tag input."
+              exit 1
+              ;;
+          esac
+
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: release-artifacts
 
@@ -172,9 +214,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.event.release.tag_name || github.ref_name }}
-          body: ${{ github.event.release.body || 'Rustify release' }}
+          tag_name: ${{ steps.target.outputs.tag }}
+          name: ${{ steps.target.outputs.tag }}
+          body: |
+            Rustify ${{ steps.target.outputs.tag }}.
+
+            - Linux x86_64: `rustify-linux-x86_64.tar.gz`
+            - Windows x86_64: `rustify-windows-x86_64.zip`
+            - macOS Apple Silicon: `rustify-macos-aarch64.tar.gz`
+            - macOS Intel: `rustify-macos-x86_64.tar.gz`
           files: |
             release-artifacts/rustify-linux-x86_64-release/rustify-linux-x86_64.tar.gz
             release-artifacts/rustify-windows-x86_64-release/rustify-windows-x86_64.zip

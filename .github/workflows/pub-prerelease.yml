@@ -5,8 +5,15 @@ on:
     branches: [master, main]
   workflow_dispatch:
 
+# The build jobs only need to read the repository. Write access is granted
+# to the job that publishes the release.
 permissions:
-  contents: write
+  contents: read
+
+# A newer push makes the previous run pointless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -16,9 +23,10 @@ jobs:
   check:
     name: Check (Linux)
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -28,7 +36,7 @@ jobs:
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libgtk-3-dev
+          sudo apt-get install -y libasound2-dev
 
       - name: Check formatting
         run: cargo fmt --check
@@ -39,6 +47,8 @@ jobs:
       - name: Test
         run: cargo test --locked
 
+      # These reach Spotify and YouTube, so they also tell us whether the
+      # sign-in flow still works.
       - name: Test against the live Spotify and YouTube APIs
         run: cargo test --locked -- --ignored
 
@@ -46,9 +56,10 @@ jobs:
     name: Linux (x86_64) Prerelease
     runs-on: ubuntu-24.04
     needs: check
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -56,7 +67,7 @@ jobs:
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libgtk-3-dev
+          sudo apt-get install -y libasound2-dev
 
       - name: Build release binary
         run: cargo build --release --locked
@@ -68,7 +79,7 @@ jobs:
           tar -czf rustify-linux-x86_64.tar.gz -C dist/linux-x86_64 rustify
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: rustify-linux-x86_64-prerelease
           path: rustify-linux-x86_64.tar.gz
@@ -78,9 +89,10 @@ jobs:
     name: Windows (x86_64) Prerelease
     runs-on: windows-2022
     needs: check
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -95,7 +107,7 @@ jobs:
           7z a rustify-windows-x86_64.zip dist/windows-x86_64/rustify.exe
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: rustify-windows-x86_64-prerelease
           path: rustify-windows-x86_64.zip
@@ -105,9 +117,10 @@ jobs:
     name: macOS (Apple Silicon) Prerelease
     runs-on: macos-15
     needs: check
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -122,7 +135,7 @@ jobs:
           tar -czf rustify-macos-aarch64.tar.gz -C dist/macos-aarch64 rustify
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: rustify-macos-aarch64-prerelease
           path: rustify-macos-aarch64.tar.gz
@@ -132,9 +145,10 @@ jobs:
     name: macOS (Intel) Prerelease
     runs-on: macos-15-intel
     needs: check
+    timeout-minutes: 40
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -149,7 +163,7 @@ jobs:
           tar -czf rustify-macos-x86_64.tar.gz -C dist/macos-x86_64 rustify
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: rustify-macos-x86_64-prerelease
           path: rustify-macos-x86_64.tar.gz
@@ -159,9 +173,12 @@ jobs:
     name: Create GitHub Prerelease
     needs: [prerelease-linux, prerelease-windows, prerelease-macos, prerelease-macos-intel]
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: prerelease-artifacts
 
@@ -174,6 +191,7 @@ jobs:
           name: Rustify Nightly Prerelease
           body: |
             Automated prerelease build from `${{ github.ref_name }}` (run ${{ github.run_id }}).
+
             - Linux x86_64: `rustify-linux-x86_64.tar.gz`
             - Windows x86_64: `rustify-windows-x86_64.zip`
             - macOS Apple Silicon: `rustify-macos-aarch64.tar.gz`
