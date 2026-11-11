@@ -105,7 +105,7 @@ jobs:
 
   release-macos:
     name: macOS (Apple Silicon) Release
-    runs-on: macos-14
+    runs-on: macos-15
     needs: check
     steps:
       - name: Checkout repository
@@ -130,9 +130,36 @@ jobs:
           path: rustify-macos-aarch64.tar.gz
           retention-days: 90
 
+  release-macos-intel:
+    name: macOS (Intel) Release
+    runs-on: macos-15-intel
+    needs: check
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Package release artifact
+        run: |
+          mkdir -p dist/macos-x86_64
+          cp target/release/rustify dist/macos-x86_64/rustify
+          tar -czf rustify-macos-x86_64.tar.gz -C dist/macos-x86_64 rustify
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustify-macos-x86_64-release
+          path: rustify-macos-x86_64.tar.gz
+          retention-days: 90
+
   release-create:
     name: Create GitHub Release
-    needs: [release-linux, release-windows, release-macos]
+    needs: [release-linux, release-windows, release-macos, release-macos-intel]
     runs-on: ubuntu-24.04
     steps:
       - name: Download all artifacts
@@ -152,6 +179,7 @@ jobs:
             release-artifacts/rustify-linux-x86_64-release/rustify-linux-x86_64.tar.gz
             release-artifacts/rustify-windows-x86_64-release/rustify-windows-x86_64.zip
             release-artifacts/rustify-macos-aarch64-release/rustify-macos-aarch64.tar.gz
+            release-artifacts/rustify-macos-x86_64-release/rustify-macos-x86_64.tar.gz
           prerelease: false
           generate_release_notes: false
           fail_on_unmatched_files: true

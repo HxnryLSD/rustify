@@ -103,7 +103,7 @@ jobs:
 
   prerelease-macos:
     name: macOS (Apple Silicon) Prerelease
-    runs-on: macos-14
+    runs-on: macos-15
     needs: check
     steps:
       - name: Checkout repository
@@ -128,9 +128,36 @@ jobs:
           path: rustify-macos-aarch64.tar.gz
           retention-days: 90
 
+  prerelease-macos-intel:
+    name: macOS (Intel) Prerelease
+    runs-on: macos-15-intel
+    needs: check
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Package release artifact
+        run: |
+          mkdir -p dist/macos-x86_64
+          cp target/release/rustify dist/macos-x86_64/rustify
+          tar -czf rustify-macos-x86_64.tar.gz -C dist/macos-x86_64 rustify
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustify-macos-x86_64-prerelease
+          path: rustify-macos-x86_64.tar.gz
+          retention-days: 90
+
   prerelease-create:
     name: Create GitHub Prerelease
-    needs: [prerelease-linux, prerelease-windows, prerelease-macos]
+    needs: [prerelease-linux, prerelease-windows, prerelease-macos, prerelease-macos-intel]
     runs-on: ubuntu-24.04
     steps:
       - name: Download all artifacts
@@ -150,10 +177,12 @@ jobs:
             - Linux x86_64: `rustify-linux-x86_64.tar.gz`
             - Windows x86_64: `rustify-windows-x86_64.zip`
             - macOS Apple Silicon: `rustify-macos-aarch64.tar.gz`
+            - macOS Intel: `rustify-macos-x86_64.tar.gz`
           files: |
             prerelease-artifacts/rustify-linux-x86_64-prerelease/rustify-linux-x86_64.tar.gz
             prerelease-artifacts/rustify-windows-x86_64-prerelease/rustify-windows-x86_64.zip
             prerelease-artifacts/rustify-macos-aarch64-prerelease/rustify-macos-aarch64.tar.gz
+            prerelease-artifacts/rustify-macos-x86_64-prerelease/rustify-macos-x86_64.tar.gz
           prerelease: true
           generate_release_notes: false
           fail_on_unmatched_files: true
