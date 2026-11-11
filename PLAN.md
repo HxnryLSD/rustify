@@ -2,88 +2,117 @@
 
 ## Summary
 
-Rustify is a lightweight unofficial Spotify client written in Rust, targeting Linux, Windows, and macOS. It uses **egui** for the UI, **rodio** for audio playback, and **sp_dc cookie authentication** for Spotify user authentication. Core differentiators: full ad blocking (audio/banner/video), privacy enforcement (private session, no logging, minimal telemetry), and an Extreme Bandwidth Saver Mode (disables images, animations, non-essential rendering).
-
-This plan covers the documentation phase (markdown files) requested by the user, plus the scaffolding and implementation roadmap.
+Rustify is a lightweight unofficial Spotify client written in Rust, targeting
+Linux, Windows, and macOS. It uses **egui** for the UI, **rodio** for audio
+playback, and the Spotify Web API for catalogue and playback control.
 
 ## Context
 
-- Project root: `/home/richter/Desktop/Rustify` — empty directory.
-- No existing code, Cargo.toml, or source files.
-- Chosen stack: Rust + egui (GUI), rodio (audio), reqwest (HTTP), serde (JSON), tokio (async runtime).
-- User decisions: egui UI, rodio audio, sp_dc cookie login, cross-platform (Linux/Windows/macOS).
+- Project root: `/home/richter/Desktop/Rustify`.
+- Chosen stack: Rust (edition 2024) + egui (GUI), rodio (audio), reqwest
+  (HTTP), serde (JSON), tokio (async runtime), rustls (TLS).
+- The application is a single crate with one binary target.
 
 ## System Impact
 
 ### Source of truth
-- Spotify Web API is the source of truth for track metadata, playlists, library, and playback state.
-- Local config file (`config.toml`) stores user preferences (bandwidth saver mode, privacy flags, ad block settings).
-- OAuth token cache stored locally (`tokens.json`) for session persistence.
+- The Spotify Web API is the source of truth for track metadata, playlists,
+  library, and playback state.
+- The local config file (`config.toml`) stores user preferences.
+- The OAuth token cache is stored locally (`tokens.json`).
 
 ### Data flow
-1. User logs in via sp_dc cookie → access token stored locally.
-2. Spotify API client (reqwest + serde) fetches track/playlist/library data.
-3. Audio URLs resolved via Spotify API → decoded/played via rodio.
-4. Ad blocker intercepts ad-related API responses and ad audio streams before playback.
-5. Bandwidth saver mode strips image/animation rendering in egui.
-6. Privacy layer forces `private_session=true`, strips telemetry headers, disables logging.
+1. The user signs in with OAuth (PKCE) or the web-player cookie exchange.
+2. The Spotify API client fetches track/playlist/library data.
+3. Playback is controlled on the user's Spotify Connect device.
+4. The ad blocker vets tracks and refuses requests to ad hosts.
+5. Bandwidth saver mode keeps the image loaders uninstalled and freezes
+   animations.
+6. The privacy layer keeps the header set minimal and writes no history.
 
 ### New state/transitions/invariants
-- `AppState`: logged_out → authenticating → authenticated → playing/paused/idle.
-- `BandwidthSaverMode`: on/off — when on, image widgets render as placeholders, animations disabled.
-- `AdBlocker`: active on all audio/banner/video requests; blocks known ad domains/patterns.
-- Invariant: when bandwidth saver is on, no image HTTP requests are issued.
-- Invariant: private session flag is always sent with Spotify API requests.
+- `AppState`: logged_out → authenticating → authenticated → playing/paused.
+- `BandwidthSaverMode`: on/off — when on, image loaders are not installed and
+  egui's animation time is zero.
+- `AdBlocker`: active on all requests and tracks.
+- Invariant: when bandwidth saver is on, no image HTTP request is issued.
+- Invariant: no request carries a tracking header.
+- Invariant: the token cache and config file are owner-readable only.
 
 ### Dependent components
-- `spotify_client.rs` depends on auth tokens and privacy config.
-- `audio_player.rs` depends on ad blocker (filters ad tracks) and bandwidth saver (may lower quality).
-- `ui.rs` (egui) depends on bandwidth saver flag for rendering decisions.
+- `spotify_client.rs` depends on auth tokens and the privacy policy.
+- `ad_blocker.rs` is consulted by the UI before playback and by the request
+  layer before a request leaves the process.
+- `views.rs` depends on the bandwidth saver flag for rendering decisions.
 - `config.rs` is the single source of truth read by all subsystems.
 
 ### Duplication avoided
-- Single `Config` struct shared across auth, client, audio, and UI — no scattered feature flags.
-- Single `AdBlocker` instance used by both audio player and UI for ad detection.
-
-### Adjacent simplifications
-- Bandwidth saver mode simplifies egui rendering (no image loading = fewer async tasks).
-- Private session mode removes need to manage "recently played" history UI.
+- A single `Config` struct shared by auth, client, audio, and UI.
+- A single `AdBlocker` instance used by both the player and the UI.
+- A single `reqwest::Client` shared by every request, so connections are
+  pooled.
 
 ### Smallest coherent solution
-- Start with a single binary (`rustify`) containing all modules; split into workspace crates only if the binary grows unwieldy.
-- One `Config` TOML file; no database for v1 — JSON/TOML files for tokens and playlists cache.
+- One crate with a single binary; split into workspace crates only if the
+  binary grows unwieldy.
+- One `Config` TOML file; no database for v1.
 
 ## Approach
 
-Documentation-first: write all markdown specs before code, so the implementation has a fixed contract. Then scaffold the Rust project and implement module by module.
+Documentation first, then implementation module by module, with the build
+verified on every step.
 
 ## Changes
 
-### Documentation files (this phase)
-- `README.md` — project overview, features, install, usage, contributing.
+### Documentation files
+- `README.md` — project overview, features, install, usage, privacy notes.
 - `ARCHITECTURE.md` — system design, module boundaries, data flow, lifecycle.
-- `FEATURES.md` — detailed spec for ad blocking, privacy, bandwidth saver, OAuth, playback.
+- `FEATURES.md` — detailed spec for ad blocking, privacy, bandwidth saver,
+  authentication, playback.
 - `API.md` — Spotify Web API endpoints used, auth flow, rate limits.
-- `ROADMAP.md` — release milestones (MVP, v1, v2).
+- `ROADMAP.md` — release milestones.
 - `CONFIG.md` — configuration file format and options.
-- `PLAN.md` — this file (implementation roadmap).
+- `PLAN.md` — this file.
 
-### Implementation files (future phases)
-- `Cargo.toml` — dependencies: egui, eframe, rodio, reqwest, serde, serde_json, tokio, toml, dirs.
-- `src/main.rs` — egui application entry point.
+### Implementation files
+- `Cargo.toml` — dependencies: egui, eframe, egui_extras, image, rodio,
+  reqwest, serde, serde_json, tokio, toml, dirs, url, hmac, sha1, sha2,
+  data-encoding, rand.
+- `src/main.rs` — eframe application entry point.
 - `src/lib.rs` — public crate exports.
-- `src/config.rs` — Config struct, TOML load/save, defaults.
-- `src/auth.rs` — sp_dc cookie exchange for access token, token storage.
-- `src/spotify_client.rs` — Spotify Web API client (reqwest + serde).
-- `src/ad_blocker.rs` — ad domain/pattern matching, stream interception.
-- `src/audio_player.rs` — rodio playback, stream handling, ad-filtered playback.
-- `src/bandwidth_saver.rs` — bandwidth saver mode logic, rendering policy.
-- `src/privacy.rs` — private session enforcement, telemetry stripping, no-logging.
-- `src/ui.rs` — egui UI: home, search, player, settings, library views.
+- `src/app.rs` — the `eframe::App` implementation.
+- `src/app_state.rs` — shared state and navigation.
+- `src/config.rs` — Config struct, TOML load/save, token cache, file modes.
+- `src/auth.rs` — web-player sign-in, device id, session.
+- `src/oauth.rs` — OAuth 2.0 authorization code + PKCE.
+- `src/totp.rs` — the web player's one-time password and its live secret.
+- `src/webplayer.rs` — the web-player API: client token, pathfinder.
+- `src/spotify_client.rs` — the public Spotify Web API client.
+- `src/models.rs` — API response types.
+- `src/ad_blocker.rs` — ad host blocking and ad recognition.
+- `src/audio_player.rs` — rodio audio playback.
+- `src/bandwidth_saver.rs` — bandwidth saver policy.
+- `src/privacy.rs` — privacy enforcement and telemetry stripping.
+- `src/worker.rs` — background request/response plumbing.
+- `src/ui.rs` — application object, request dispatch, API worker.
+- `src/views.rs` — screen implementations.
+- `src/login_view.rs` — sign-in screen.
+- `src/youtube.rs` — YouTube search, matching, and stream resolution.
+- `src/local_library.rs` — the local music folder.
+- `src/error.rs` — error types.
+- `tests/auth_flow.rs` — live sign-in tests against Spotify's servers.
+- `tests/webplayer_flow.rs` — live web-player and YouTube tests.
 
 ## Verification
 
 - `cargo build` — compiles without errors.
-- `cargo test` — unit tests pass (config parsing, ad blocker matching, URL validation).
-- Manual: launch `cargo run`, complete OAuth login, browse/search, play a track, toggle bandwidth saver, confirm images disabled.
-- Edge cases: expired token refresh, offline mode, ad track skipped automatically, bandwidth saver persists across restart.
+- `cargo build --release` — optimized build.
+- `cargo test` — unit tests pass (config parsing, ad blocker matching, TOTP,
+  the web-player response shapes, YouTube matching, URL handling, request
+  headers).
+- `cargo test -- --ignored` — live tests: the sign-in flow against Spotify's
+  servers, the web-player API, and the YouTube search.
+- `cargo clippy --all-targets -- -D warnings` — no warnings.
+- `cargo fmt --check` — formatted.
+- Manual: launch `cargo run`, complete the sign-in, browse, search, play a
+  track, toggle bandwidth saver, and confirm images are disabled.

@@ -1,4 +1,4 @@
-name: Publish Release
+name: Release
 
 on:
   release:
@@ -13,12 +13,41 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -C link-arg=-s
-  PKG_CONFIG_PATH: /var/lib/flatpak/runtime/org.freedesktop.Sdk/x86_64/25.08/3912bfb67e8fbda84403f805028df718c7f12216fe5cafb8b54b8bb0d57ad955/files/lib/x86_64-linux-gnu/pkgconfig
 
 jobs:
+  check:
+    name: Check (Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libgtk-3-dev
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Lint
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Test against the live Spotify and YouTube APIs
+        run: cargo test --locked -- --ignored
+
   release-linux:
     name: Linux (x86_64) Release
     runs-on: ubuntu-24.04
+    needs: check
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -32,10 +61,7 @@ jobs:
           sudo apt-get install -y libasound2-dev libgtk-3-dev
 
       - name: Build release binary
-        run: cargo build --release
-
-      - name: Strip binary
-        run: strip target/release/rustify
+        run: cargo build --release --locked
 
       - name: Package release artifact
         run: |
@@ -53,6 +79,7 @@ jobs:
   release-windows:
     name: Windows (x86_64) Release
     runs-on: windows-2022
+    needs: check
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -61,7 +88,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build release binary
-        run: cargo build --release
+        run: cargo build --release --locked
 
       - name: Package release artifact
         run: |
@@ -77,8 +104,9 @@ jobs:
           retention-days: 90
 
   release-macos:
-    name: macOS (x86_64 + Apple Silicon) Release
-    runs-on: macos-latest
+    name: macOS (Apple Silicon) Release
+    runs-on: macos-14
+    needs: check
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -87,19 +115,19 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build release binary
-        run: cargo build --release
+        run: cargo build --release --locked
 
       - name: Package release artifact
         run: |
-          mkdir -p dist/macos-universal
-          cp target/release/rustify dist/macos-universal/rustify
-          tar -czf rustify-macos-universal.tar.gz -C dist/macos-universal rustify
+          mkdir -p dist/macos-aarch64
+          cp target/release/rustify dist/macos-aarch64/rustify
+          tar -czf rustify-macos-aarch64.tar.gz -C dist/macos-aarch64 rustify
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rustify-macos-universal-release
-          path: rustify-macos-universal.tar.gz
+          name: rustify-macos-aarch64-release
+          path: rustify-macos-aarch64.tar.gz
           retention-days: 90
 
   release-create:
@@ -123,7 +151,7 @@ jobs:
           files: |
             release-artifacts/rustify-linux-x86_64-release/rustify-linux-x86_64.tar.gz
             release-artifacts/rustify-windows-x86_64-release/rustify-windows-x86_64.zip
-            release-artifacts/rustify-macos-universal-release/rustify-macos-universal.tar.gz
+            release-artifacts/rustify-macos-aarch64-release/rustify-macos-aarch64.tar.gz
           prerelease: false
           generate_release_notes: false
           fail_on_unmatched_files: true
